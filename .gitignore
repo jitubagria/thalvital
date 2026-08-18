@@ -1,0 +1,17 @@
+# Environment-specific secrets and generated runtime data
+config.php
+.env
+.env.*
+!*.example
+setup.php
+/shared/
+/backups/
+*.dump
+*.sql
+!schema.sql
+!seed.sql
+!migrations/*.sql
+uploads/
+storage/
+*.log
+!scripts/prod-db-user.sql

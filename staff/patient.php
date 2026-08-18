@@ -1,0 +1,32 @@
+<?php
+require_once __DIR__ . '/../includes/layout.php';
+require_once __DIR__ . '/../includes/matching.php';
+$s = require_staff_center();
+$p = passport($_GET['id'] ?? '');
+if (!$p || !patient_access($s, $p)) { http_response_code(404); exit('Patient not found'); }
+$q = db()->prepare('SELECT v.*,c.name center,GROUP_CONCAT(x.result ORDER BY x.id SEPARATOR ", ") crossmatch_results,GROUP_CONCAT(x.technique ORDER BY x.id SEPARATOR ", ") crossmatch_techniques,GROUP_CONCAT(DISTINCT x.antigen_override SEPARATOR " | ") overrides,GROUP_CONCAT(DISTINCT x.authorized_by SEPARATOR ", ") authorized_by FROM visits v JOIN blood_centers c ON c.id=v.center_id LEFT JOIN crossmatches x ON x.visit_id=v.id WHERE v.patient_id=? GROUP BY v.id ORDER BY v.visit_date DESC, v.id DESC');
+$q->execute([$p['patient_id']]);
+$visits = $q->fetchAll();
+$q = db()->prepare('SELECT * FROM ferritin_logs WHERE patient_id=? ORDER BY test_date DESC');
+$q->execute([$p['patient_id']]);
+$f = $q->fetchAll();
+// 4b: same-group available stock at the logged-in center, ranked by the matcher.
+$cq = db()->prepare('SELECT b.*,c.name center FROM bags b JOIN blood_centers c ON c.id=b.center_id WHERE b.blood_group=? AND b.status="available" AND b.expiry_date>=CURDATE() AND c.id=? ORDER BY b.expiry_date');
+$cq->execute([$p['blood_group'], (int)$s['center_id']]);
+$candidates = $cq->fetchAll();
+$ranked = rank_bags_for_patient($p['antibodies'], $p['phenotype'], $candidates);
+$rhTyped = false;
+foreach (['antigen_C','antigen_c_lower','antigen_E','antigen_e_lower'] as $c) { if (ag_state($p['phenotype'][$c] ?? null) !== null) { $rhTyped = true; break; } }
+$abStatus = [];
+foreach ($p['antibodies'] as $ab) {
+    $name = $ab['antibody']; $col = ANTIBODY_ANTIGEN[$name] ?? null; $ag = substr($name, 5);
+    if ($col === null) { $abStatus[] = ['kind'=>'notice','txt'=>$name.' — cannot verify against stock (v2 system); bench crossmatch is the safeguard']; continue; }
+    $n = 0; foreach ($candidates as $b) { if (ag_state($b[$col]) === 0) $n++; }
+    $abStatus[] = $n > 0
+        ? ['kind'=>'ok','txt'=>$name.' — '.$n.' verified '.$ag.'-negative unit'.($n>1?'s':'').' in '.$p['blood_group'].' stock']
+        : ['kind'=>'alert','txt'=>$name.' on record — no tested-'.$ag.'-negative unit available; issue needs authorization + consent'];
+}
+$badge = function($m){ if ($m['hard_block']) return ['b-block','⛔ Incompatible']; if (!empty($m['unverifiable'])) return ['b-gray','◐ Unverifiable']; if (!empty($m['proph_mismatch']) || !empty($m['proph_warn'])) return ['b-warn','⚠ Prophylactic']; return ['b-ok','✓ Match']; };
+$reasons = function($m){ if ($m['hard_block']) return implode('; ', array_column($m['blocking'],'reason')); if (!empty($m['unverifiable'])) return 'cannot verify: '.implode(', ',$m['unverifiable']); $r = array_merge(array_column($m['proph_mismatch'],'reason'), array_column($m['proph_warn'],'reason')); if ($r) return implode('; ', $r); return $m['proph_typed'] ? 'verified antigen-negative · prophylactic-matched' : 'verified antigen-negative'; };
+staff_start('Patient Passport', 'patient.php');
+?><div class="page-head patient-page-head"><h1><?=h($p['full_name'])?></h1><span class="patient-actions"><a class="btn" href="/staff/visit.php?patient=<?=h($p['patient_id'])?>">Log transfusion</a><a class="btn outline" href="/staff/clinical-entry.php?patient=<?=h($p['patient_id'])?>">＋ <?=t('clinical_entry')?></a></span></div><?php if($p['antibodies']):?><div class="alert">⚠ Antibodies detected. Antigen-negative blood and documented crossmatch are required.</div><?php endif; passport_card($p); ?><section class="card"><h2>Compatibility &amp; matched stock <span class="muted" style="font-weight:400">— <?=h($p['blood_group'])?> at <?=h($s['_center_name'])?></span></h2><?php foreach($abStatus as $a): ?><p class="<?=$a['kind']==='alert'?'alert':($a['kind']==='notice'?'notice':'muted')?>"<?=$a['kind']==='ok'?' style="font-weight:700;color:var(--green)"':''?>><?=$a['kind']==='ok'?'✓ ':($a['kind']==='alert'?'⛔ ':'⚠ ')?><?=h($a['txt'])?></p><?php endforeach; if(!$rhTyped): ?><p class="notice">⚠ Patient not phenotyped for Rh — prophylactic match unavailable (not-tested never counts as negative).</p><?php endif; if(!$ranked): ?><p class="muted">No <?=h($p['blood_group'])?> units currently available at <?=h($s['_center_name'])?>.</p><?php else: ?><?php foreach($ranked as $b): [$bc,$bl]=$badge($b['_match']); ?><div class="match-row"><div><code><?=h($b['bag_number'])?></code> <span class="muted"><?=h($b['center'])?> · <?=h($b['phenotype_string']?:'not typed')?> · exp <?=h($b['expiry_date'])?></span><br><span class="reasons"><?=h($reasons($b['_match']))?></span></div><span class="badge <?=$bc?>"><?=$bl?></span></div><?php endforeach; endif; ?></section><section class="grid"><article class="card"><h2>Patient details</h2><p><b>Guardian:</b> <?=h($p['guardian_name'])?></p><p><b>Mobile:</b> <?=h($p['mobile'])?></p><p><b>Aadhaar:</b> XXXX-XXXX-<?=h($p['aadhaar_last4'])?></p><p><b>Address:</b> <?=h($p['address'])?></p></article><article class="card"><h2>Hb trend</h2><canvas id="hb"></canvas><script>new Chart(hb,{type:'line',data:{labels:<?=json_encode(array_column($visits,'visit_date'))?>,datasets:[{label:'Pre Hb',data:<?=json_encode(array_column($visits,'pre_hb'))?>,borderColor:'#0D6B85'}]}})</script></article></section><details class="card"><summary><b>Serology summary — progressive disclosure</b></summary><p>Review DCT/ICT and antibody workups in the center record before issue.</p></details><section class="card"><h2>Transfusion history</h2><table><tr><th>Date</th><th>Center</th><th>Pre / post Hb</th><th>Units</th><th>Crossmatch</th><th>Technique</th></tr><?php foreach($visits as $v):?><tr><td><?=h($v['visit_date'])?></td><td><?=h($v['center'])?></td><td><?=h($v['pre_hb'])?> / <?=h($v['post_hb'])?></td><td><?=h($v['units_given'])?></td><td><?=h($v['crossmatch_results'] ?: 'Not recorded')?><?php if(!empty($v['overrides'])):?><br><span class="badge b-block">override</span> <span class="reasons"><?=h($v['overrides'])?><?=!empty($v['authorized_by'])?' · auth: '.h($v['authorized_by']):''?></span><?php endif?></td><td><?=h($v['crossmatch_techniques'] ?: '—')?></td></tr><?php endforeach?></table></section><section class="card"><h2>Ferritin trend</h2><table><tr><th>Date</th><th>ng/mL</th><th>Chelation</th></tr><?php foreach($f as $x):?><tr><td><?=h($x['test_date'])?></td><td><?=h($x['ferritin_ng_ml'])?></td><td><?=h($x['chelation_agent'])?></td></tr><?php endforeach?></table></section><?php staff_end();

@@ -1,0 +1,8 @@
+Chart.js v4.4.9 — https://www.chartjs.org/
+Copyright (c) 2014-2025 Chart.js Contributors
+Licensed under the MIT License (https://github.com/chartjs/Chart.js/blob/master/LICENSE.md)
+
+Self-hosted UMD bundle (chart.umd.min.js, includes @kurkle/color) so ThalVital
+carries no runtime CDN dependency — locked-down hospital networks may block CDNs.
+Loaded render-blocking (no defer) in includes/layout.php head() because pages call
+`new Chart(...)` from inline scripts that must find the global synchronously.

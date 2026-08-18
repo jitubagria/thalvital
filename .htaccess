@@ -1,0 +1,24 @@
+# ThalVital web-root hardening.
+# The release layout uses docroot = release/public/ (the `git archive --prefix=public/`
+# tree from scripts/release-tag.ps1), so the whole app — including schema.sql, seed.sql,
+# docs, and includes/ — sits under the web root. Deny direct web access to everything
+# that is not a real HTTP entry point.
+#
+# NOTE: .htaccess only applies if the vhost sets `AllowOverride FileInfo Limit` (or All).
+# On a hardened shared box AllowOverride may be None, in which case these rules are
+# IGNORED — the authoritative control is the equivalent <Directory> block in the Apache
+# vhost (see DEPLOYMENT.md → "Apache vhost"). Keep both in sync; this file is defense-in-depth.
+
+# 1) Never serve source data, docs, tooling, or config as static files.
+<FilesMatch "\.(sql|md|ps1|sh|sample\.php|sock|log)$">
+  Require all denied
+</FilesMatch>
+<Files "config.php">
+  Require all denied
+</Files>
+
+# 2) Block internal PHP (require'd server-side, never fetched over HTTP) and tooling dirs.
+RedirectMatch 404 ^/(includes|scripts)(/|$)
+
+# 3) Never expose a VCS directory if one is ever present in a release.
+RedirectMatch 404 ^/\.(git|hg|svn)(/|$)

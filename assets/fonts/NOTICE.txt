@@ -1,0 +1,10 @@
+IBM Plex Sans and IBM Plex Sans Devanagari
+Copyright © 2017 IBM Corp. (https://github.com/IBM/plex)
+
+Licensed under the SIL Open Font License, Version 1.1 (OFL-1.1).
+Full license text: https://openfontlicense.org/
+
+The .woff2 files in this directory are the Latin and Devanagari subsets
+(weights 400/600/700) packaged by the Fontsource project
+(https://fontsource.org), redistributed here for self-hosting so ThalVital
+carries no runtime font-CDN dependency (hospital networks may block CDNs).
